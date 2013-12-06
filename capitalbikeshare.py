@@ -1,6 +1,8 @@
 #For use with Capital Bikeshare trip history data.
 #Available at http://www.capitalbikeshare.com/trip-history-data.
 #The relevent file is imported into Python as a pandas DataFrame using the read_csv method.
+#This module assumes a DataFrame with the following column names: Duration, Start date, End Date, Start station, End station, Start terminal, End terminal, Bike#, Subscription type.  The rename_columns() method corrects for some variations, such as different capitalization.
+#Many methods in this module depend on station terminal numbers, which have only been included in the data since the start of 2012.
 
 import numpy as np
 import pandas as pd
@@ -9,16 +11,33 @@ import re as re
 import datetime as dt
 import random
 
+def rename_columns(df):
+#Input DataFrame.
+#Searches for and replaces column names that are inconsistent with the expected column names.
+	columns = list(df.columns)
+	for c in range(len(columns)):
+		columns[c] = re.sub('[Dd]uration','Duration',columns[c])
+		columns[c] = re.sub('[Ss]tart [Dd]ate','Start date',columns[c])
+		columns[c] = re.sub('[Ee]nd [Dd]ate','End date',columns[c])
+		columns[c] = re.sub('[Ss]tart [Ss]tation','Start station',columns[c])
+		columns[c] = re.sub('[Ee]nd [Ss]tation','End station',columns[c])
+		columns[c] = re.sub('[Ss]tart [Tt]erminal','Start terminal',columns[c])
+		columns[c] = re.sub('[Ee]nd [Tt]erminal','End terminal',columns[c])
+		columns[c] = re.sub('[Bb]ike#|[Bb]ike #','Bike#',columns[c])
+		columns[c] = re.sub('[Mm]ember [Tt]ype|[Ss]ubscription [Tt]ype|[Tt]ype','Subscription type',columns[c])
+	df.columns = columns
+	return df
+
 def duration_timedelta(d):
-#Input 'Duration' column in default format ('[0-9*]h [0-9*]m [0-9*]s').
+#Input 'Duration' column in default format ('[0-9]*h [0-9]*m [0-9]*s').
 #Returns each duration as Python datetime.timedelta. 
-	durations = d.apply(lambda x: re.split('[a-z]',x))
+	durations = d.apply(lambda x: re.split('[^0-9]*',x))
 	return durations.apply(lambda x: dt.timedelta(hours=int(x[0]),minutes=int(x[1]),seconds=int(x[2])))
 
 def duration_in_seconds(d):
-#Input 'Duration' column in default format ('[0-9*]h [0-9*]m [0-9*]s').
+#Input 'Duration' column in default format ('[0-9]*h [0-9]*m [0-9]*s').
 #Returns each duration in number of seconds as an int. 
-	durations = d.apply(lambda x: re.split('[a-z ]*',x))
+	durations = d.apply(lambda x: re.split('[^0-9]*',x))
 	return durations.apply(lambda x: int(x[0])*3600 + int(x[1])*60 +int(x[2]))
 
 def split_date_time(t):
@@ -39,36 +58,44 @@ def format_date(t):
 def replace_columns(df):
 #Input DataFrame.
 #Returns DataFrame with columns replaced by those returned from duration_timedelta() and split_date_time().
+	df = rename_columns(df)
 	durations = duration_timedelta(df['Duration'])
 	start_dates, start_times = split_date_time(df['Start date'])
 	start_times.name = 'Start time'
 	end_dates, end_times = split_date_time(df['End date'])
 	end_times.name = 'End time'
-	return pd.concat([durations, start_dates, start_times, df['Start terminal'], end_dates, end_times, df['End terminal'], df['Subscription Type']], axis=1)
+	replaced = pd.concat([durations, start_dates, start_times, df['Start terminal'], end_dates, end_times, df['End terminal'], df['Subscription type']], axis=1)
+	replaced.columns = ['Duration','Start date','Start time','Start terminal','End date','End time','End terminal','Subscription type']
 
 def format_columns(df):
 #Input DataFrame.
 #Returns DataFrame with columns replaced by those returned from duration_timedelta and format_date methods.
+	df = rename_columns(df)
 	durations = duration_timedelta(df['Duration'])
 	start_dates = format_date(df['Start date'])
 	end_dates = format_date(df['End date'])
-	return pd.concat([durations, start_dates, df['Start terminal'], end_dates, df['End terminal'], df['Subscription Type']], axis=1)
+	formatted = pd.concat([durations, start_dates, df['Start terminal'], end_dates, df['End terminal'], df['Subscription type']], axis=1)
+	formatted.columns = ['Duration','Start date','Start terminal','End date','End terminal','Subscription type']
+	return formatted
 
-def stations_dict(df, station_col='Start Station', terminal_col='Start terminal'):
-#Input DataFrame and, optionally, the column names of the starting stations and terminal numbers.
+def stations_dict(df):
+#Input DataFrame.
 #Returns a dict with the terminal numbers as keys and the stations names as values.
-	df = df.drop_duplicates([station_col, terminal_col])
-	return dict(zip(df[terminal_col],df[station_col]))
+	df = rename_columns(df)
+	df = df.drop_duplicates(['Start station', 'Start terminal'])
+	return dict(zip(df['Start terminal'],df['Start station']))
 
-def terminals_dict(df, station_col='Start Station', terminal_col='Start terminal'):
-#Input DataFrame and, optionally, the column names of the starting stations and terminal numbers.
+def terminals_dict(df):
+#Input DataFrame.
 #Returns a dict with the station names as keys and the terminal numbers as values.
-	df = df.drop_duplicates([station_col, terminal_col])
-	return dict(zip(df[station_col],df[terminal_col]))
+	df = rename_columns(df)
+	df = df.drop_duplicates(['Start station', 'Start terminal'])
+	return dict(zip(df['Start station'],df['Start terminal']))
 		
 def net_bikes(df):
 #Input DataFrame.
 #Returns a DataFrame of the difference between the number of trips started from, and ended at, each station.
+	df = rename_columns(df)
 	starts = df['Start terminal'].value_counts()
 	ends = df['End terminal'].value_counts()
 	start_mismatches = pd.Series(starts.index).apply(lambda x: x not in ends.index)
@@ -113,7 +140,7 @@ def plot_change(df, terminal, line_color='b', legend_name=''):
 	data_to_plot.plot(color=line_color, label=legend_name)
 	return data_to_plot
 
-def plot_top_terminals(df, n, legend=False, stations={}):
+def plot_top_terminals(df, n=5, legend=False, stations={}):
 #Input a DataFrame in the format returned by the change_in_bikes(), the number of terminals to plot, and optional plotting criteria.
 #For the n most active stations, plots the net change between trips_started from that station and ended at that station over time.
 	terminals = list(df['Terminal'].value_counts()[:n].index)
