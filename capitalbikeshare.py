@@ -9,6 +9,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import re as re
 import datetime as dt
+import copy as cp
 import random
 
 def rename_columns(df):
@@ -23,8 +24,8 @@ def rename_columns(df):
 		columns[c] = re.sub('[Ee]nd [Ss]tation','End station',columns[c])
 		columns[c] = re.sub('[Ss]tart [Tt]erminal','Start terminal',columns[c])
 		columns[c] = re.sub('[Ee]nd [Tt]erminal','End terminal',columns[c])
-		columns[c] = re.sub('[Bb]ike#|[Bb]ike #','Bike#',columns[c])
-		columns[c] = re.sub('[Mm]ember [Tt]ype|[Ss]ubscription [Tt]ype|[Tt]ype','Subscription type',columns[c])
+		columns[c] = re.sub('[Bb]ike.*','Bike#',columns[c])
+		columns[c] = re.sub('.*[Tt]ype.*','Subscription type',columns[c])
 	df.columns = columns
 	return df
 
@@ -34,79 +35,55 @@ def duration_timedelta(d):
 	durations = d.apply(lambda x: re.split('[^0-9]*',x))
 	return durations.apply(lambda x: dt.timedelta(hours=int(x[0]),minutes=int(x[1]),seconds=int(x[2])))
 
-def duration_in_seconds(d):
-#Input 'Duration' column in default format ('[0-9]*h [0-9]*m [0-9]*s').
-#Returns each duration in number of seconds as an int. 
-	durations = d.apply(lambda x: re.split('[^0-9]*',x))
-	return durations.apply(lambda x: int(x[0])*3600 + int(x[1])*60 +int(x[2]))
-
-def split_date_time(t):
-#Input 'Start date' or 'End date' column in default format ('[0-9*]/[0-9*]/[0-9*] [0-9]*:[0-9*]').
-#Returns each date as Python date and each time as Python time.
-	t = t.apply(lambda x: re.split('[/: ]',x))
-	dates = t.apply(lambda x: dt.date(month=int(x[0]),day=int(x[1]),year=int(x[2])))
-	times = t.apply(lambda x: dt.time(hour=int(x[3]),minute=int(x[4])))
-	return dates, times
-
 def format_date(t):
 #Input 'Start date' or 'End date' column in default format ('[0-9*]/[0-9*]/[0-9*] [0-9]*:[0-9*]').
 #Returns each date/time as Python datetime object.
-	t = t.apply(lambda x: re.split('[/: ]',x))
-	datetimes = t.apply(lambda x: dt.datetime(month=int(x[0]),day=int(x[1]),year=int(x[2]),hour=int(x[3]),minute=int(x[4])))
-	return datetimes
-
-def replace_columns(df):
-#Input DataFrame.
-#Returns DataFrame with columns replaced by those returned from duration_timedelta() and split_date_time().
-	df = rename_columns(df)
-	durations = duration_timedelta(df['Duration'])
-	start_dates, start_times = split_date_time(df['Start date'])
-	start_times.name = 'Start time'
-	end_dates, end_times = split_date_time(df['End date'])
-	end_times.name = 'End time'
-	replaced = pd.concat([durations, start_dates, start_times, df['Start terminal'], end_dates, end_times, df['End terminal'], df['Subscription type']], axis=1)
-	replaced.columns = ['Duration','Start date','Start time','Start terminal','End date','End time','End terminal','Subscription type']
+        t = t.apply(lambda x: re.split('[/: ]',x))
+        datetimes = t.apply(lambda x: dt.datetime(month=int(x[0]),day=int(x[1]),year=int(x[2]),hour=int(x[3]),minute=int(x[4])))
+        return datetimes
 
 def format_columns(df):
 #Input DataFrame.
-#Returns DataFrame with columns replaced by those returned from duration_timedelta and format_date methods.
+#Returns DataFrame with appropriate columns reformatted as datetimes.
 	df = rename_columns(df)
-	durations = duration_timedelta(df['Duration'])
-	start_dates = format_date(df['Start date'])
-	end_dates = format_date(df['End date'])
-	formatted = pd.concat([durations, start_dates, df['Start terminal'], end_dates, df['End terminal'], df['Subscription type']], axis=1)
-	formatted.columns = ['Duration','Start date','Start terminal','End date','End terminal','Subscription type']
-	return formatted
+	#Uncomment the line below to format the Duration column as Python datetime.timedelta.
+	#df['Duration'] = duration_timedelta(df['Duration'])
+	df['Start date'] = format_date(df['Start date'])
+	df['End date'] = format_date(df['End date'])
+	return df
 
-def stations_dict(df):
+def stations_dict(df_raw):
 #Input DataFrame.
 #Returns a dict with the terminal numbers as keys and the stations names as values.
+	df = cp.deepcopy(df_raw)
 	df = rename_columns(df)
 	df = df.drop_duplicates(['Start station', 'Start terminal'])
 	return dict(zip(df['Start terminal'],df['Start station']))
 
-def terminals_dict(df):
+def terminals_dict(df_raw):
 #Input DataFrame.
 #Returns a dict with the station names as keys and the terminal numbers as values.
+	df = cp.deepcopy(df_raw)
 	df = rename_columns(df)
 	df = df.drop_duplicates(['Start station', 'Start terminal'])
 	return dict(zip(df['Start station'],df['Start terminal']))
 		
-def net_bikes(df):
+def net_bikes(df_raw):
 #Input DataFrame.
 #Returns a DataFrame of the difference between the number of trips started from, and ended at, each station.
+	df = cp.deepcopy(df_raw)
 	df = rename_columns(df)
 	starts = df['Start terminal'].value_counts()
 	ends = df['End terminal'].value_counts()
 	start_mismatches = pd.Series(starts.index).apply(lambda x: x not in ends.index)
 	if sum(start_mismatches) > 0:
-		print "The following start terminals were removed because there was no matching end terminal:"
-		print starts.index[start_mismatches]
+		print("The following start terminals were removed because there was no matching end terminal:")
+		print(starts.index[start_mismatches])
 		starts = starts[[not s for s in start_mismatches]]
 	end_mismatches = pd.Series(ends.index).apply(lambda x: x not in starts.index)
 	if sum(end_mismatches) > 0:
-		print "The following end terminals were removed because there was no matching start terminal:"
-		print ends.index[end_mismatches]
+		print("The following end terminals were removed because there was no matching start terminal:")
+		print(ends.index[end_mismatches])
 		ends = ends[[not e for e in end_mismatches]]
 	starts = starts.sort_index()
 	ends = ends.sort_index()	
@@ -115,34 +92,82 @@ def net_bikes(df):
 	netbikes.index = pd.Series(netbikes.index).apply(lambda x: stations[x])
 	return netbikes
 
-def change_in_bikes(df):
+def net_tracker(df_raw):
 #Input DataFrame.
-#Returns a DataFrame that keeps track of how many bikes have been added or lost from each station over time.
+#Returns a DataFrame that keeps track of the difference between the number of trips started from, and ended at, each terminal over time.
+	df = cp.deepcopy(df_raw)
 	df = format_columns(df)
-	starts = pd.concat([df['Start date'], df['Start terminal'], pd.Series([-1]*len(df.index))],axis=1)
-	ends = pd.concat([df['End date'], df['End terminal'], pd.Series([1]*len(df.index))],axis=1)
-	bike_counts = pd.concat([starts, ends])
-	bike_counts.columns = ['Time','Terminal','Bikes']
-	bike_counts = bike_counts[bike_counts['Terminal'].apply(lambda x: not np.isnan(x))]
-	bike_counts = bike_counts.sort(columns='Time')
-	bike_counts.index = range(len(bike_counts.index))
-	terminals = {t:0 for t in bike_counts['Terminal']}
-	for i in range(len(bike_counts.index)):
-		terminals[bike_counts['Terminal'][i]] += bike_counts['Bikes'][i]
-		bike_counts['Bikes'][i] = terminals[bike_counts['Terminal'][i]]
-	return bike_counts
+	starts = pd.concat([df['Start date'], df['Start terminal'], df['Bike#'], pd.Series([-1]*len(df.index))],axis=1)
+	ends = pd.concat([df['End date'], df['End terminal'], df['Bike#'], pd.Series([1]*len(df.index))],axis=1)
+	bikes_count = pd.concat([starts, ends])
+	bikes_count.columns = ['Date','Terminal','Bike#','Bikes Count']
+	bikes_count = bikes_count[bikes_count['Terminal'].apply(lambda x: not np.isnan(x))]
+	bikes_count = bikes_count.sort(columns='Date')
+	bikes_count.index = range(len(bikes_count.index))
+	bikes_count['Bikes Count'] = bikes_count.groupby('Terminal')['Bikes Count'].transform(np.cumsum)
+	return bikes_count
+        
+def estimated_tracker(df_raw):
+#Input DataFrame.
+#Returns a DataFrame that estimates how many bikes have been added or lost from each terminal over time.
+#The data only shows bike movement when riders check out a bike and does not include reapportionment of bikes between terminals, so this method tries to estimate that bike movement.
+#This method counts the number of trips started from, and ended at, each terminal over time, but also keeps track of whether a bike that was dropped off at one terminal is later checked out from another terminal.
+	df = cp.deepcopy(df_raw)
+	df = format_columns(df)
+	starts = pd.concat([df['Start date'], df['Start terminal'], df['Bike#'], pd.Series([-1]*len(df.index))],axis=1)
+	ends = pd.concat([df['End date'], df['End terminal'], df['Bike#'], pd.Series([1]*len(df.index))],axis=1)
+	df2 = pd.concat([starts, ends])
+	df2.columns = ['Date','Terminal','Bike#','Gain/Loss']
+	df2 = df2[df2['Terminal'].apply(lambda x: not np.isnan(x))]
+	df2 = df2.sort(columns='Date')
+	df2.index = range(len(df2.index))
+	terminals = set(df2['Terminal'])
+	counts = {t:0 for t in terminals}
+	bikes = {t:set() for t in terminals}
+	bikes_dict = {'Date':[], 'Terminal':[], 'Bike#':[], 'Bikes Count':[]}
+	def add_row(date, terminal, bike, count):
+		bikes_dict['Date'].append(date)
+		bikes_dict['Terminal'].append(terminal)
+		bikes_dict['Bike#'].append(bike)
+		bikes_dict['Bikes Count'].append(count)		
+	for i in range(len(df2.index)):
+		d = df2['Date'][i]
+		t = df2['Terminal'][i]
+		b = df2['Bike#'][i]
+		if df2['Gain/Loss'][i] == 1:
+			if b not in bikes[t]:
+				counts[t] += 1
+				bikes[t].add(b)
+				add_row(d,t,b,counts[t])
+			for term in [x for x in terminals if x!=t]:
+				if b in bikes[term]:
+					counts[term] -= 1
+					bikes[term].remove(b)
+					add_row(d,term,b,counts[term])
+		else:
+			if b in bikes[t]:
+				counts[t] -= 1
+				bikes[t].remove(b)
+				add_row(d,t,b,counts[t])
+			for term in [x for x in terminals if x!=t]:
+				if b in bikes[term]:
+					counts[term] -= 1
+					bikes[term].remove(b)
+					add_row(d,term,b,counts[term])
+	bikes_count = pd.DataFrame(bikes_dict)
+	return bikes_count
 
 def plot_change(df, terminal, line_color='b', legend_name=''):
-#Input a DataFrame in the format returned by the change_in_bikes(), a terminal number to plot, and optional plotting criteria.
-#Plots the net change between trips started from that station and ended at that station over time, and returns that data as a Series.
+#Input a DataFrame in the format returned by net_tracker() or estimated_tracker(), a terminal number to plot, and optional plotting criteria.
+#Plots the net change between trips started from that terminal and ended at that terminal over time, and returns that data as a Series.
 	terminal_rows = df[df['Terminal']==terminal]
-	data_to_plot = pd.Series(list(terminal_rows['Bikes']), index=list(terminal_rows['Time']))
+	data_to_plot = pd.Series(list(terminal_rows['Bikes Count']), index=list(terminal_rows['Date']))
 	data_to_plot.plot(color=line_color, label=legend_name)
 	return data_to_plot
 
 def plot_top_terminals(df, n=5, legend=False, stations={}):
-#Input a DataFrame in the format returned by the change_in_bikes(), the number of terminals to plot, and optional plotting criteria.
-#For the n most active stations, plots the net change between trips_started from that station and ended at that station over time.
+#Input a DataFrame in the format returned by net_tracker() or estimated_tracker.  Optionally, input the number of terminals to plot and other plotting criteria.
+#For the n most active terminals, plots the net change between trips_started from that terminal and ended at that terminal over time.
 	terminals = list(df['Terminal'].value_counts()[:n].index)
 	#To show a legend with station names, set stations to be a dict mapping terminal numbers to station names
 	#The dict may be obtained by calling stations_dict() on the original, raw data set.
@@ -150,8 +175,8 @@ def plot_top_terminals(df, n=5, legend=False, stations={}):
 		labels = [stations[t] for t in terminals]
 	else:
 		labels = terminals
-	colors = zip([x/float(n) for x in range(n)], [y%n/float(n) for y in range(n/3,n+n/3)],[z%n/float(n) for z in range(n*2/3,n+n*2/3)])
-	for i in range(len(terminals)):
+	colors = list(zip([x/float(n) for x in range(n)], [y%n/float(n) for y in range(n//3,n+n//3)],[z%n/float(n) for z in range(n*2//3,n+n*2//3)]))
+	for i in range(n):
 		plot_change(df,terminals[i],colors[i],labels[i])
 	#Set legend to True to display a legend on the plot.
 	if legend:
